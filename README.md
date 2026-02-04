@@ -127,6 +127,8 @@ After installation, configure your web server to point to the tirreno directory 
 
 ### Docker installation
 
+One line: `curl -sL tirreno.com/t.yml | docker compose -f - up -d`
+
 ```bash
 # Create network
 docker network create tirreno-network
