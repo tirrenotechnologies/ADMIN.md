@@ -2,9 +2,7 @@
 
 System administration guide for tirreno
 
----
-
-## About this guide
+### About this guide
 
 Welcome to the tirreno administration guide. This document covers installation, configuration, security hardening, updating, and troubleshooting for tirreno deployments.
 
