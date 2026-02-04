@@ -129,12 +129,15 @@ After installation, configure your web server to point to the tirreno directory 
 
 One line: `curl -sL tirreno.com/t.yml | docker compose -f - up -d`
 
+**Manual Docker:**
+
 ```bash
 # Create network
 docker network create tirreno-network
 
 # Start PostgreSQL
-docker run -d --name tirreno-db \
+docker run -d \
+  --name tirreno-db \
   --network tirreno-network \
   -e POSTGRES_DB=tirreno \
   -e POSTGRES_USER=tirreno \
@@ -143,12 +146,50 @@ docker run -d --name tirreno-db \
   postgres:15
 
 # Start tirreno
-docker run --name tirreno-app \
+docker run -d \
+  --name tirreno-app \
   --network tirreno-network \
   -p 8585:80 \
   -v tirreno:/var/www/html \
-  -d tirreno/tirreno:latest
+  tirreno/tirreno:latest
 ```
+
+**Compose:**
+
+```yaml
+services:
+  tirreno-app:
+    image: tirreno/tirreno:latest
+    ports:
+      - "8585:80"
+    volumes:
+      - tirreno:/var/www/html
+    networks:
+      - tirreno-network
+    depends_on:
+      - tirreno-db
+
+  tirreno-db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: tirreno
+      POSTGRES_USER: tirreno
+      POSTGRES_PASSWORD: secret
+    volumes:
+      - ./db:/var/lib/postgresql/data
+    networks:
+      - tirreno-network
+
+networks:
+  tirreno-network:
+
+volumes:
+  tirreno:
+```
+
+Run: `docker compose up -d`
+
+Access `http://localhost:8585/install/` and use database URL `postgresql://tirreno:secret@tirreno-db:5432/tirreno`.
 
 ### Heroku deployment
 
