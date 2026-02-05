@@ -6,27 +6,6 @@ System administration guide for tirreno
 
 Welcome to the tirreno administration guide. This document covers installation, configuration, security hardening, updating, and troubleshooting for tirreno deployments.
 
-tirreno is available in three editions:
-
-- **Community Edition** (open-source): For developer and product teams that want to add a security layer to self-hosted applications. Get started today without getting into complex business relationships. Licensed under GNU Affero General Public License v3 (AGPL-3.0).
-
-- **Application Edition**: Protects your organization's internal applications from account threats, ensures audit trails and field history for compliance, detects data exfiltration and insider threats.
-
-- **Platform Edition**: Built for client portals, SaaS, public sector portals, and digital platforms. Multi-application support, fraud and abuse prevention, and dedicated assistance for your SOC, product, and risk teams.
-
-For Application and Platform editions, contact team@tirreno.com.
-
-```
-     Community ──────────────► Application ────────────► Platform
-       Edition                    Edition                  Edition
-         │                         │                         │
-         ▼                         ▼                         ▼
-    Personal apps             Internal apps            External-facing
-    + Basic security          + Compliance             + Multi-app
-    + Development             + Audit trails           + Fraud/abuse
-    + No support              + Insider threats        + Dedicated support
-```
-
 ### Target audience
 
 This guide is for system administrators who want to install, configure, secure, update, and maintain tirreno deployments.
@@ -127,7 +106,9 @@ After installation, configure your web server to point to the tirreno directory 
 
 ### Docker installation
 
-One line: `curl -sL tirreno.com/t.yml | docker compose -f - up -d`
+**One line Docker:**
+
+`curl -sL tirreno.com/t.yml | docker compose -f - up -d`
 
 **Manual Docker:**
 
@@ -203,7 +184,7 @@ Access the installer at `https://your-domain.com/install/` (for [Docker](#docker
 
 You can enter credentials in two ways:
 
-1. **Database URL** (recommended for Docker/Heroku):
+1. **Database URL** (recommended for Docker):
    ```
    postgresql://tirreno:secret@tirreno-db:5432/tirreno
    ```
@@ -597,6 +578,10 @@ docker-compose up -d
 | "PDO PostgreSQL driver" | Install: `apt install php-pgsql` |
 | "Config folder permission" | `chmod 755 config && chown www-data:www-data config` |
 | "Memory limit" | Set `memory_limit = 128M` in php.ini |
+| Invalid hostname (TN8001) | The application was accessed using a hostname that doesn't match the configured allowed host(s). This is a security measure to prevent host header attacks. The user must access the application through the correct URL defined in the configuration. |
+| Failed DB connect (TN8002) | The application cannot establish a connection to the PostgreSQL database. This could be caused by incorrect database credentials, the database server being down, network issues, or misconfigured connection parameters in the config file. |
+| Incomplete config (TN8003) | The application's configuration file (config/local/config.local.ini) is missing required settings or environment variable overrides are not properly set. The application cannot start without complete configuration. |
+
 
 **PHP version check:**
 
@@ -672,6 +657,10 @@ The Logbook shows all incoming API requests:
 - Unexpected IPs: Verify your application servers
 
 ### Cronjob issues
+
+**Manual cron:**
+
+`php /home/user/tirreno/index.php /cron`
 
 **Common cron issues:**
 
