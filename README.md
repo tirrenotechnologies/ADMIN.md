@@ -679,6 +679,7 @@ The Logbook shows all incoming API requests:
 |----------|-----|
 | Live Demo | [play.tirreno.com](https://play.tirreno.com) (admin/tirreno) |
 | Documentation | [docs.tirreno.com](https://docs.tirreno.com) |
+| Resource center | [tirreno.com/bat](https://www.tirreno.com/bat/) |
 | Developers Guide | [github.com/tirrenotechnologies/DEVELOPMENT.md](https://github.com/tirrenotechnologies/DEVELOPMENT.md) |
 | GitHub | [github.com/tirrenotechnologies/tirreno](https://github.com/tirrenotechnologies/tirreno) |
 | GitLab Mirror | [gitlab.com/tirreno/tirreno](https://gitlab.com/tirreno/tirreno) |
