@@ -631,11 +631,21 @@ curl -v -X POST https://your-tirreno.com/sensor/ \
 
 | Code | Meaning |
 |------|---------|
-| 200 | Success |
+| 2xx | Success 200,204 |
 | 401 | Invalid or missing API key |
 | 400 | Missing required parameters |
-| 429 | Rate limited |
+| 429 | Rate limited (LEAKY_BUCKET_RPS & LEAKY_BUCKET_WINDOW in /config/config.ini) |
 | 500 | Server error |
+
+**Validation error response (400):**
+```
+Validation error: "Required field is missing or empty" for key "ipAddress"
+```
+**Rate limit exceeded (429):**
+
+tirreno has a leaky bucket rate limiter that can be configured in the /config/config.ini file via the LEAKY_BUCKET_RPS and LEAKY_BUCKET_WINDOW parameters. This allows you to set an RPS cap to prevent tirreno from failing under an excessive volume of events.
+
+**Note:** Successful requests (2xx) return no response body.
 
 ### Logbook review
 
