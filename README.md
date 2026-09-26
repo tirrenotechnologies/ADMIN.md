@@ -64,9 +64,11 @@ This guide is for system administrators who want to install, configure, secure, 
 
 ### System requirements
 
-- **PHP** 8.0–8.3 with PDO_PGSQL, cURL, mbstring
+- **PHP** 8.0–8.3 with PDO_PGSQL, pgsql, cURL, mbstring
+- **PHP** `memory_limit` of at least 128 MB
 - **PostgreSQL** 12+
-- **Apache** with mod_rewrite
+- **Apache** with mod_rewrite and `.htaccess` support (`AllowOverride All`)
+- Read/write permission for the `/config` directory (the installer writes `config/local/config.local.ini`)
 
 Hardware: 512 MB RAM for PostgreSQL (4 GB recommended), ~3 GB storage per 1M events.
 
@@ -100,6 +102,12 @@ composer create-project tirreno/tirreno
 
 ```bash
 composer require tirreno/tirreno
+```
+
+**Note:** `composer.json` pins the platform to PHP 8.1.32, and the development tools (PHPUnit, PHPStan) require PHP 8.1 or later. On PHP 8.0, or on any production server, install without development dependencies:
+
+```bash
+composer create-project --no-dev tirreno/tirreno
 ```
 
 After installation, configure your web server to point to the tirreno directory and run the [web installer](#web-installer).
@@ -143,6 +151,9 @@ services:
     image: tirreno/tirreno:latest
     ports:
       - "8585:80"
+    # Optional: overrides SITE from config.local.ini (see Changing the site URL)
+    # environment:
+    #   SITE: localhost:8585
     volumes:
       - tirreno:/var/www/html
     networks:
@@ -178,7 +189,17 @@ Click [here](https://heroku.com/deploy?template=https://github.com/tirrenotechno
 
 ### Web installer
 
-Access the installer at `https://your-domain.com/install/` (for [Docker](#docker-installation): `http://localhost:8585/install/`) and provide PostgreSQL database credentials.
+**Prepare the database first** (not needed for [Docker](#docker-installation), where the database user is a superuser):
+
+The schema needs the `citext`, `pgcrypto` and `pg_stat_statements` extensions. `pg_stat_statements` can only be created by a PostgreSQL superuser, so create the extensions as `postgres` before running the installer:
+
+```bash
+sudo -u postgres psql -c "CREATE USER tirreno WITH PASSWORD 'secret';"
+sudo -u postgres createdb -O tirreno tirreno
+sudo -u postgres psql -d tirreno -c "CREATE EXTENSION IF NOT EXISTS citext; CREATE EXTENSION IF NOT EXISTS pgcrypto; CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"
+```
+
+Access the installer at `https://your-domain.com/install/` (for [Docker](#docker-installation): `http://localhost:8585/install/`) and provide PostgreSQL database credentials. Open it using the host name you will use for tirreno: the installer saves the current host as `SITE`.
 
 **Input options:**
 
@@ -204,7 +225,7 @@ Before running the full installation, click the **Test** button to verify your d
 - **Green** button = connection successful
 - **Red** button = connection failed (check credentials)
 
-This allows you to validate credentials without applying the schema.
+This allows you to validate credentials without applying the schema. The test only checks that tirreno can connect; it does not check whether the user can create the required extensions.
 
 **Installation steps:**
 
@@ -220,7 +241,7 @@ When you click **Connect**, the installer runs these steps:
 
 **After successful installation:**
 1. Delete the `/install` directory
-2. Visit `/signup` to create your admin account
+2. Visit `/signup` to create your admin account (email, password of at least 8 characters, time zone and rules preset). `/signup` is available only until the first account exists; after that it returns 404
 
 ### Post-installation steps
 
@@ -246,7 +267,7 @@ tirreno can be configured via environment variables or config file settings. Env
 | Setting | Env Variable | Config Key | Description |
 |---------|--------------|------------|-------------|
 | Database | `DATABASE_URL` | `DATABASE_URL` | PostgreSQL connection string (e.g., `postgres://user:pass@host:5432/dbname`) |
-| Site URL | `SITE` | `SITE` | Base URL for the application (e.g., `https://tirreno.example.com`) |
+| Site host | `SITE` | `SITE` | Host name(s) of the instance, comma-separated, without protocol (e.g., `tirreno.example.com`; include the port if it is not 80/443, e.g., `localhost:8585`) |
 | Pepper | `PEPPER` | `PEPPER` | Password pepper for secure hashing (random string, keep secret) |
 
 **Optional settings:**
@@ -260,16 +281,32 @@ tirreno can be configured via environment variables or config file settings. Env
 | Force HTTPS | `FORCE_HTTPS` | `FORCE_HTTPS` | `false` | Force HTTPS redirects |
 | Forgot password | `ALLOW_FORGOT_PASSWORD` | `ALLOW_FORGOT_PASSWORD` | `false` | Enable forgot password feature |
 | Show email/phone | `ALLOW_EMAIL_PHONE` | `ALLOW_EMAIL_PHONE` | `false` | Enable email/phone display |
-| Logbook limit | `LOGBOOK_LIMIT` | `LOGBOOK_LIMIT` | `3000` | Maximum logbook entries to retain |
+| Logbook limit | `LOGBOOK_LIMIT` | `LOGBOOK_LIMIT` | `3000` | Number of logbook records kept per API key during logbook rotation |
+| Rate limit RPS | `LEAKY_BUCKET_RPS` | `LEAKY_BUCKET_RPS` | `10` | Sensor rate limit: average allowed requests per second, per API key (`0` disables the limit) |
+| Rate limit window | `LEAKY_BUCKET_WINDOW` | `LEAKY_BUCKET_WINDOW` | `20` | Sensor rate limit window in seconds: at most `LEAKY_BUCKET_RPS × LEAKY_BUCKET_WINDOW` requests are accepted within the window (`0` disables the limit) |
+| Log to stdout | `LOG_TO_STDOUT` | `LOG_TO_STDOUT` | `false` | Also write log messages to stdout (useful for Docker/Heroku) |
+| Debug level | `DEBUG` | `DEBUG` | `0` | Error detail level, see [Debug levels](#debug-levels) |
+| Config file | `CONFIG_FILE` | — | `local/config.local.ini` | Alternative local config file for the dashboard, relative to `config/`. The sensor always reads `config/local/config.local.ini` |
 
 **Config file only settings (`config/config.ini`):**
 
 | Config Key | Default | Description |
 |------------|---------|-------------|
-| `DEBUG` | `0` | Debug mode (0=off, 1-3=verbosity levels) |
 | `SEND_EMAIL` | `1` | Enable email sending |
 | `SMTP_DEBUG` | `0` | SMTP debug output |
 | `MIN_PASSWORD_LENGTH` | `8` | Minimum password length |
+| `PRINT_SQL_LOG_AFTER_EACH_SCRIPT_CALL` | `0` | Write SQL queries to `assets/logs/sql.log` |
+
+#### Debug levels
+
+| Level | Behaviour |
+|-------|-----------|
+| `0` | Errors with file and line; warnings and info messages are logged |
+| `1` | Same as 0, plus debug messages |
+| `2` | Errors with stack trace; warnings, info and debug messages |
+| `3` | Errors with stack trace including function arguments; warnings, info and debug messages |
+
+The stack trace is shown on the error page only to logged-in operators. Use `0` in production.
 
 ### Cronjob setup
 
@@ -278,23 +315,27 @@ tirreno uses a built-in cron system. Jobs are configured in `config/crons.ini` a
 **System crontab entry (run every 10 minutes):**
 
 ```bash
-*/10 * * * * /usr/bin/php /absolute/path/to/tirreno/index.php /cron
+*/10 * * * * /usr/bin/php /absolute/path/to/tirreno/index.php /cron >> /var/log/tirreno-cron.log 2>&1
 ```
+
+Add the entry to the crontab of the web server user (e.g., `crontab -u www-data -e`) so file permissions match, and make sure that user can write to the log file. The cron endpoint works only from the command line; over HTTP it returns 404.
+
+Each run executes the jobs whose schedule matches the current time. Jobs with `* * * * *` match every minute, so they run on every invocation (every 10 minutes with the entry above). The `0-10` ranges below are chosen so that the jobs match a `*/10` run at minute 0 or 10. Queue handlers keep processing until their queue is empty or a time limit is reached.
 
 **Built-in cron jobs (config/crons.ini):**
 
-| Job | Schedule | Description |
-|-----|----------|-------------|
-| enrichmentQueueHandler | Every minute | Process IP/email/phone enrichment |
-| riskScoreQueueHandler | Every minute | Calculate user risk scores |
-| batchedNewEvents | Every minute | Process new incoming events |
-| blacklistQueueHandler | Every minute | Process blacklist updates |
-| deletionQueueHandler | Every minute | Handle data deletion requests |
-| notificationsHandler | Every minute | Send alert notifications |
-| totals | Every minute | Update dashboard statistics |
-| logbookRotation | 0-10 * * * * | Rotate logbook entries |
-| retentionPolicyViolations | 0-10 0 * * * | Check retention policy daily |
-| queuesClearer | 0-10 0 * * 2 | Clear stale queues weekly |
+| Job | Schedule (cron expression) | Description |
+|-----|----------------------------|-------------|
+| enrichmentQueueHandler | `* * * * *` | Process IP/email/phone enrichment |
+| riskScoreQueueHandler | `* * * * *` | Calculate user risk scores |
+| batchedNewEvents | `* * * * *` | Process new incoming events |
+| blacklistQueueHandler | `* * * * *` | Process blacklist updates |
+| deletionQueueHandler | `* * * * *` | Handle data deletion requests |
+| notificationsHandler | `* * * * *` | Send alert notifications |
+| totals | `* * * * *` | Update dashboard statistics |
+| logbookRotation | `0-10 * * * *` | Rotate logbook entries |
+| retentionPolicyViolations | `0-10 0 * * *` | Check retention policy daily |
+| queuesClearer | `0-10 0 * * 2` | Clear stale queues weekly |
 
 **Verify cron is running:**
 ```bash
@@ -324,7 +365,7 @@ The install directory contains setup scripts that could be exploited if left acc
 ```bash
 # Restrict config directory
 chmod 750 config/
-chmod 640 config/*.ini
+chmod 640 config/*.ini config/local/config.local.ini
 
 # Restrict sensitive files
 chmod 640 composer.json composer.lock
@@ -369,15 +410,27 @@ curl -I https://your-tirreno.com/config/local/config.local.ini
 
 ### Access control
 
-**1. Admin account security:**
+**1. Roles and permissions:**
+
+Since v0.10.0 tirreno uses role-based access control (RBAC). Operators are assigned roles, and roles grant permissions to pages.
+
+| Role | Default permissions |
+|------|---------------------|
+| `superuser` | All permissions, including `user_admin` (operator administration) |
+| `operator` | All page permissions (`page_view`, `page_edit`, `page_delete`, `page_publish`) except `user_admin`, on all pages except `/cron` |
+| `guest` | Visitors who are not logged in: `page_view` and `page_edit` on the signup, login, password recovery and error pages only |
+
+Permissions are assigned per role and page (`dshb_roles_permissions`, `dshb_pages_permissions`). The account created at `/signup` (only one account can be created this way) gets the `operator` role.
+
+**2. Operator account security:**
 - Use strong, unique passwords
-- Limit the number of admin accounts
+- Give the `superuser` role to as few people as possible; use `operator` for everyone else
+- Remove operators who no longer need access
 - Review access logs regularly
 
-**2. Session management:**
-- Sessions expire after inactivity (default: 30 minutes)
-- Sessions invalidated on password change
-- Secure session cookies (HttpOnly, Secure, SameSite)
+**3. Session management:**
+- Sessions are stored in the database (`KEEP_SESSION_IN_DB = 1` in `config/config.ini`)
+- Serve the dashboard over HTTPS only so session cookies are never sent in plain text
 
 ### Monitoring and logging
 
@@ -390,6 +443,8 @@ tirreno writes logs to the `assets/logs/` directory:
 | `error.log` | Application errors and exceptions |
 | `blacklist.log` | Blacklist events — records when users are automatically blacklisted by rules |
 | `sql.log` | SQL queries (disabled by default, enable with `PRINT_SQL_LOG_AFTER_EACH_SCRIPT_CALL = 1`) |
+
+For Docker/Heroku deployments, set `LOG_TO_STDOUT = true` to also send log messages to the container output.
 
 Monitor blacklist.log to track automatic fraud detection:
 ```bash
@@ -431,34 +486,34 @@ Use this checklist for production deployments:
 
 ### Changing the site URL
 
-When moving tirreno to a new domain or URL, update the `SITE` configuration:
+When moving tirreno to a new domain or URL, update the `SITE` configuration. `SITE` holds host names only, without `https://`:
 
 **Option 1: Configuration file**
 
 Edit `config/local/config.local.ini`:
 ```ini
 [globals]
-SITE = https://new-domain.com
+SITE = new-domain.com
 ```
 
 **Option 2: Environment variable**
 
 Set the `SITE` environment variable:
 ```bash
-export SITE=https://new-domain.com
+export SITE=new-domain.com
 ```
 
-For Docker deployments, update the environment in `docker-compose.yml`:
+For Docker deployments, uncomment and update the `environment` block of `tirreno-app` in `docker-compose.yml`:
 ```yaml
 environment:
-  - SITE=https://new-domain.com
+  SITE: new-domain.com
 ```
 
 **Multiple domains:**
 
 tirreno supports multiple domains (comma-separated):
 ```ini
-SITE = https://primary.com,https://secondary.com
+SITE = primary.com,secondary.com
 ```
 
 After changing the URL:
@@ -472,13 +527,13 @@ After changing the URL:
 
 ```bash
 # Full database backup
-pg_dump -U tirreno_app -d tirreno -F c -f tirreno_backup.dump
+pg_dump -U tirreno -d tirreno -F c -f tirreno_backup.dump
 
 # Schema only
-pg_dump -U tirreno_app -d tirreno --schema-only -f tirreno_schema.sql
+pg_dump -U tirreno -d tirreno --schema-only -f tirreno_schema.sql
 
 # Data only
-pg_dump -U tirreno_app -d tirreno --data-only -f tirreno_data.sql
+pg_dump -U tirreno -d tirreno --data-only -f tirreno_data.sql
 ```
 
 **Importing to new server:**
@@ -488,19 +543,19 @@ pg_dump -U tirreno_app -d tirreno --data-only -f tirreno_data.sql
 createdb -U postgres tirreno
 
 # Restore from backup
-pg_restore -U tirreno_app -d tirreno tirreno_backup.dump
+pg_restore -U tirreno -d tirreno tirreno_backup.dump
 
 # Or restore from SQL
-psql -U tirreno_app -d tirreno < tirreno_schema.sql
-psql -U tirreno_app -d tirreno < tirreno_data.sql
+psql -U tirreno -d tirreno < tirreno_schema.sql
+psql -U tirreno -d tirreno < tirreno_data.sql
 ```
 
 **Verify migration:**
 
 ```bash
 # Check table counts
-psql -U tirreno_app -d tirreno -c "SELECT COUNT(*) FROM event_account;"
-psql -U tirreno_app -d tirreno -c "SELECT COUNT(*) FROM event;"
+psql -U tirreno -d tirreno -c "SELECT COUNT(*) FROM event_account;"
+psql -U tirreno -d tirreno -c "SELECT COUNT(*) FROM event;"
 ```
 
 ---
@@ -528,14 +583,14 @@ tirreno periodically releases updates with new features and security patches.
 ```bash
 cd /path/to/tirreno
 git fetch origin
-git pull origin main
+git pull origin master
 ```
 
 If you have local changes, stash them first:
 
 ```bash
 git stash
-git pull origin main
+git pull origin master
 git stash pop
 ```
 
@@ -549,14 +604,14 @@ composer update tirreno/tirreno
 
 ```bash
 docker pull tirreno/tirreno:latest
-docker-compose down
-docker-compose up -d
+docker compose down
+docker compose up -d
 ```
 
 ### After updating
 
 1. Remove the installation folder: `rm -rf /path/to/tirreno/install`
-2. Clear any application cache if applicable
+2. Clear the application cache in `tmp/` if applicable
 3. Run database migrations if required (check release notes)
 4. Verify the application is working correctly
 5. Check the Logbook for any errors
@@ -574,10 +629,12 @@ docker-compose up -d
 | "Connection refused" | PostgreSQL not running or wrong port |
 | "Authentication failed" | Wrong database credentials |
 | "Database does not exist" | Create database first: `createdb tirreno` |
-| "Permission denied" | Grant permissions: `GRANT ALL ON DATABASE tirreno TO tirreno_app` |
-| "PDO PostgreSQL driver" | Install: `apt install php-pgsql` |
+| "Permission denied" | Grant permissions: `GRANT ALL ON DATABASE tirreno TO tirreno` |
+| "PDO PostgreSQL driver" | Install: `apt install php-pgsql` (provides both `pdo_pgsql` and `pgsql`) |
 | "Config folder permission" | `chmod 755 config && chown www-data:www-data config` |
 | "Memory limit" | Set `memory_limit = 128M` in php.ini |
+| "Apply database schema (… permission denied to create extension "pg_stat_statements")" | The database user is not a superuser. Create the extensions as `postgres` (see [Web installer](#web-installer)), then remove the installer lock (next row) and click **Connect** again |
+| "Database already locked by another installation process" | A previous installation attempt failed and left its lock. If no other installation is running, remove it: `sudo -u postgres psql -d tirreno -c "DROP TABLE IF EXISTS dshb_install_flag;"` |
 | Invalid hostname (TN8001) | The application was accessed using a hostname that doesn't match the configured allowed host(s). This is a security measure to prevent host header attacks. The user must access the application through the correct URL defined in the configuration. |
 | Failed DB connect (TN8002) | The application cannot establish a connection to the PostgreSQL database. This could be caused by incorrect database credentials, the database server being down, network issues, or misconfigured connection parameters in the config file. |
 | Incomplete config (TN8003) | The application's configuration file (config/local/config.local.ini) is missing required settings or environment variable overrides are not properly set. The application cannot start without complete configuration. |
@@ -591,11 +648,11 @@ tirreno requires PHP 8.0–8.3. Verify your PHP version:
 # Check PHP CLI version
 php -v
 
-# Check PHP version used by web server
-php -r "echo PHP_VERSION;"
+# The web server may use a different PHP version than the CLI;
+# the installer's Compatibility step checks the web server's PHP
 
 # Check all required extensions
-php -m | grep -E "pdo_pgsql|curl|json|mbstring"
+php -m | grep -E "pdo_pgsql|pgsql|curl|mbstring"
 ```
 
 If using multiple PHP versions, ensure Apache/Nginx uses the correct one:
@@ -611,11 +668,22 @@ ls -la /run/php/
 
 **Note:** The API uses form-urlencoded format, not JSON.
 
+**Required parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `userName` | Unique user ID (max 100 chars) |
+| `ipAddress` | IPv4/IPv6 address (invalid IPs default to `0.0.0.0`) |
+| `url` | URL path (max 2047 chars) |
+| `eventTime` | UTC timestamp `Y-m-d H:i:s.v` (defaults to current UTC time if missing or invalid) |
+
+See the [API reference](https://github.com/tirrenotechnologies/DEVELOPMENT.md#api-reference) for optional parameters and event types.
+
 **Events not appearing in tirreno:**
 
-1. **Check API key:** Ensure your API key matches the one in tirreno settings
+1. **Check API key:** Ensure your API key matches the one on the **API** page of tirreno, where it is shown as the **Tracking ID**
 2. **Verify endpoint:** Confirm you're posting to `/sensor/` (with trailing slash)
-3. **Check Logbook:** Look for failed requests in the Logbook page
+3. **Check Logbook:** Look for failed requests in the Logbook page. Requests with a missing or unknown API key do not appear in the Logbook; check the web server error log instead (see below)
 4. **Test with curl:**
 ```bash
 curl -v -X POST https://your-tirreno.com/sensor/ \
@@ -627,23 +695,37 @@ curl -v -X POST https://your-tirreno.com/sensor/ \
   -d "eventType=page_view"
 ```
 
+**Trace a request:** add `-H "X-Request-Id: test-0001"` to the curl command above. The ID (up to 36 characters) is stored in the database with the event (`event.traceid`), or with the rejected request if validation fails (`event_incorrect.traceid`), so you can match it with your application logs. It is not shown in the dashboard or the Logbook.
+
+**Test from the server command line** (bypasses the web server, useful to rule out Apache or network issues):
+
+```bash
+php sensor/index.php --apiKey=your-api-key --userName=test --ipAddress=1.2.3.4 \
+    --url=/test --eventTime="2024-12-08 01:01:00.000" --eventType=page_view
+```
+
 **Check response codes:**
 
-| Code | Meaning |
-|------|---------|
-| 2xx | Success 200,204 |
-| 401 | Invalid or missing API key |
-| 400 | Missing required parameters |
-| 429 | Rate limited (LEAKY_BUCKET_RPS & LEAKY_BUCKET_WINDOW in /config/config.ini) |
+| Response | Meaning |
+|----------|---------|
+| 204, no body | Event accepted |
+| 200, empty body | Request rejected: missing or unknown API key, or a required field is missing. See the web server error log for the reason |
+| 429 | Rate limited (`LEAKY_BUCKET_RPS` & `LEAKY_BUCKET_WINDOW`, see [Environment variables](#environment-variables)) |
 | 500 | Server error |
+| 403 | Wrong endpoint, e.g., `/sensor` without the trailing slash |
 
-**Validation error response (400):**
+**Rejection reasons** are written to the web server error log (e.g., `/var/log/apache2/error.log`, or the PHP-FPM log if you use PHP-FPM):
 ```
-Validation error: "Required field is missing or empty" for key "ipAddress"
+Error 401: Api-Key header is not set
+Error 401: API key from the "Api-Key" header is not found
+Error 400: Validation error: "Required field is missing or empty" for key "ipAddress"
 ```
+
+Fields with invalid values are corrected instead of rejected and logged as **Validation warning**: a missing or invalid `eventTime` is replaced with the current UTC time, and an empty or invalid `ipAddress` with `0.0.0.0`.
+
 **Rate limit exceeded (429):**
 
-tirreno has a leaky bucket rate limiter that can be configured in the /config/config.ini file via the LEAKY_BUCKET_RPS and LEAKY_BUCKET_WINDOW parameters. This allows you to set an RPS cap to prevent tirreno from failing under an excessive volume of events.
+tirreno has a leaky bucket rate limiter, applied per API key and configured with `LEAKY_BUCKET_RPS` (default `10`) and `LEAKY_BUCKET_WINDOW` (default `20` seconds): at most `LEAKY_BUCKET_RPS × LEAKY_BUCKET_WINDOW` requests are accepted within the window. Set either value in `config/local/config.local.ini` or as an environment variable; `0` disables the limit. This allows you to set an RPS cap to prevent tirreno from failing under an excessive volume of events.
 
 **Note:** Successful requests (2xx) return no response body.
 
@@ -654,15 +736,28 @@ The Logbook shows all incoming API requests:
 1. **Access:** Navigate to Logbook in the left menu
 2. **Columns:**
    - Source IP: Where the request came from
-   - Timestamp: When the request was received
+   - Local timestamp: When the request was received (in your time zone)
    - Endpoint: Which API endpoint was called
-   - Status: HTTP response code
+   - Status: Status type (see below)
+   - Raw POST data: The fields that were sent
 3. **Filtering:** Use the search box to filter by any column
 4. **Chart:** Shows request volume over time
 
+**Logbook status types:**
+
+| Status | Description |
+|--------|-------------|
+| Success | Event recorded successfully |
+| Validation warning | Event recorded with field corrections (e.g., truncated values) |
+| Critical validation error | Event rejected due to missing required fields |
+| Critical error | Server error, event not recorded |
+| Rate limit exceeded | Request rejected due to rate limiting (`LEAKY_BUCKET_RPS` & `LEAKY_BUCKET_WINDOW`) |
+
 **What to look for:**
-- 401 errors: API key issues
-- 400 errors: Missing or invalid parameters
+- Critical validation errors: missing required parameters
+- Validation warnings: invalid values that were corrected (e.g., missing `eventTime`)
+- Rate limit exceeded: raise `LEAKY_BUCKET_RPS` / `LEAKY_BUCKET_WINDOW` or reduce traffic
+- No entries at all: API key issues (these requests are not logged in the Logbook; check the web server error log)
 - Gaps in traffic: Network or integration issues
 - Unexpected IPs: Verify your application servers
 
@@ -691,10 +786,12 @@ The Logbook shows all incoming API requests:
 | Documentation | [docs.tirreno.com](https://docs.tirreno.com) |
 | Resource center | [tirreno.com/bat](https://www.tirreno.com/bat/) |
 | Developers Guide | [github.com/tirrenotechnologies/DEVELOPMENT.md](https://github.com/tirrenotechnologies/DEVELOPMENT.md) |
+| API reference | [github.com/tirrenotechnologies/API.md](https://github.com/tirrenotechnologies/API.md) |
 | GitHub | [github.com/tirrenotechnologies/tirreno](https://github.com/tirrenotechnologies/tirreno) |
 | GitLab Mirror | [gitlab.com/tirreno/tirreno](https://gitlab.com/tirreno/tirreno) |
 | Docker Hub | [hub.docker.com/r/tirreno/tirreno](https://hub.docker.com/r/tirreno/tirreno) |
 | Docker Repo | [github.com/tirrenotechnologies/docker](https://github.com/tirrenotechnologies/docker) |
+| Packagist | [packagist.org/packages/tirreno/tirreno](https://packagist.org/packages/tirreno/tirreno) |
 | PHP Tracker | [github.com/tirrenotechnologies/tirreno-php-tracker](https://github.com/tirrenotechnologies/tirreno-php-tracker) |
 | Python Tracker | [github.com/tirrenotechnologies/tirreno-python-tracker](https://github.com/tirrenotechnologies/tirreno-python-tracker) |
 | Node.js Tracker | [github.com/tirrenotechnologies/tirreno-nodejs-tracker](https://github.com/tirrenotechnologies/tirreno-nodejs-tracker) |
