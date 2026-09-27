@@ -241,7 +241,7 @@ When you click **Connect**, the installer runs these steps:
 
 **After successful installation:**
 1. Delete the `/install` directory
-2. Visit `/signup` to create your admin account (email, password of at least 8 characters, time zone and rules preset). `/signup` is available only until the first account exists; after that it returns 404
+2. Visit `/signup` to create your admin account. `/signup` is available only until the first account exists.
 
 ### Post-installation steps
 
@@ -315,7 +315,7 @@ tirreno uses a built-in cron system. Jobs are configured in `config/crons.ini` a
 **System crontab entry (run every 10 minutes):**
 
 ```bash
-*/10 * * * * /usr/bin/php /absolute/path/to/tirreno/index.php /cron >> /var/log/tirreno-cron.log 2>&1
+*/10 * * * * /usr/bin/php /absolute/path/to/tirreno/index.php /cron 
 ```
 
 Add the entry to the crontab of the web server user (e.g., `crontab -u www-data -e`) so file permissions match, and make sure that user can write to the log file. The cron endpoint works only from the command line; over HTTP it returns 404.
@@ -655,12 +655,11 @@ php -v
 php -m | grep -E "pdo_pgsql|pgsql|curl|mbstring"
 ```
 
-If using multiple PHP versions, ensure Apache/Nginx uses the correct one:
+If using multiple PHP versions, ensure Apache use the correct one:
 ```bash
 # Check PHP module loaded by Apache
 apachectl -M | grep php
 
-# For PHP-FPM, check the socket path in your nginx/apache config
 ls -la /run/php/
 ```
 
@@ -703,6 +702,7 @@ curl -v -X POST https://your-tirreno.com/sensor/ \
 php sensor/index.php --apiKey=your-api-key --userName=test --ipAddress=1.2.3.4 \
     --url=/test --eventTime="2024-12-08 01:01:00.000" --eventType=page_view
 ```
+No output means success, errors are printed to stderr (exit code is always 0).
 
 **Check response codes:**
 
@@ -714,7 +714,7 @@ php sensor/index.php --apiKey=your-api-key --userName=test --ipAddress=1.2.3.4 \
 | 500 | Server error |
 | 403 | Wrong endpoint, e.g., `/sensor` without the trailing slash |
 
-**Rejection reasons** are written to the web server error log (e.g., `/var/log/apache2/error.log`, or the PHP-FPM log if you use PHP-FPM):
+**Rejection reasons** are written to the web server error log (e.g., `/var/log/apache2/error.log`):
 ```
 Error 401: Api-Key header is not set
 Error 401: API key from the "Api-Key" header is not found
