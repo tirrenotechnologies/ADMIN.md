@@ -318,7 +318,7 @@ tirreno uses a built-in cron system. Jobs are configured in `config/crons.ini` a
 */10 * * * * /usr/bin/php /absolute/path/to/tirreno/index.php /cron 
 ```
 
-Add the entry to the crontab of the web server user (e.g., `crontab -u www-data -e`) so file permissions match, and make sure that user can write to the log file. The cron endpoint works only from the command line; over HTTP it returns 404.
+Add the entry to the crontab of the web server user (e.g., `crontab -u www-data -e`) so file permissions match. The cron endpoint works only from the command line; over HTTP it returns 404.
 
 Each run executes the jobs whose schedule matches the current time. Jobs with `* * * * *` match every minute, so they run on every invocation (every 10 minutes with the entry above). The `0-10` ranges below are chosen so that the jobs match a `*/10` run at minute 0 or 10. Queue handlers keep processing until their queue is empty or a time limit is reached.
 
@@ -342,8 +342,8 @@ Each run executes the jobs whose schedule matches the current time. Jobs with `*
 # Check cron service
 systemctl status cron
 
-# View tirreno cron logs
-tail -f /var/log/tirreno-cron.log
+# View cron progress (cron writes to the application log)
+tail -f assets/logs/error.log
 
 # Run cron manually to test
 /usr/bin/php /absolute/path/to/tirreno/index.php /cron
@@ -446,7 +446,7 @@ tirreno writes logs to the `assets/logs/` directory:
 
 For Docker/Heroku deployments, set `LOG_TO_STDOUT = true` to also send log messages to the container output.
 
-Monitor blacklist.log to track automatic fraud detection:
+Monitor blacklist.log to track automatic fraud detection (the file is created with the first automatic blacklisting):
 ```bash
 tail -f assets/logs/blacklist.log
 ```
@@ -498,10 +498,12 @@ SITE = new-domain.com
 
 **Option 2: Environment variable**
 
-Set the `SITE` environment variable:
-```bash
-export SITE=new-domain.com
+Set the `SITE` environment variable. For Apache, set it in the virtual host; a variable exported in your shell does not reach the running web server:
+```apache
+SetEnv SITE new-domain.com
 ```
+
+The cron job runs from the command line and does not see `SetEnv`, so keep `SITE` in `config/local/config.local.ini` up to date as well.
 
 For Docker deployments, uncomment and update the `environment` block of `tirreno-app` in `docker-compose.yml`:
 ```yaml
@@ -511,7 +513,7 @@ environment:
 
 **Multiple domains:**
 
-tirreno supports multiple domains (comma-separated):
+tirreno supports multiple domains (comma-separated). Redirects, such as the one to the login page, always go to the first domain:
 ```ini
 SITE = primary.com,secondary.com
 ```
@@ -526,36 +528,39 @@ After changing the URL:
 **Exporting the database:**
 
 ```bash
+# Connect over TCP (-h 127.0.0.1) so the tirreno password is used;
+# local socket connections use peer authentication and fail for other OS users
+
 # Full database backup
-pg_dump -U tirreno -d tirreno -F c -f tirreno_backup.dump
+pg_dump -h 127.0.0.1 -U tirreno -d tirreno -F c -f tirreno_backup.dump
 
 # Schema only
-pg_dump -U tirreno -d tirreno --schema-only -f tirreno_schema.sql
+pg_dump -h 127.0.0.1 -U tirreno -d tirreno --schema-only -f tirreno_schema.sql
 
 # Data only
-pg_dump -U tirreno -d tirreno --data-only -f tirreno_data.sql
+pg_dump -h 127.0.0.1 -U tirreno -d tirreno --data-only -f tirreno_data.sql
 ```
 
 **Importing to new server:**
 
 ```bash
-# Create database on new server
-createdb -U postgres tirreno
+# Create the user, database and extensions on the new server (as the PostgreSQL superuser)
+sudo -u postgres psql -c "CREATE USER tirreno WITH PASSWORD 'secret';"
+sudo -u postgres createdb -O tirreno tirreno
+sudo -u postgres psql -d tirreno -c "CREATE EXTENSION IF NOT EXISTS citext; CREATE EXTENSION IF NOT EXISTS pgcrypto; CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"
 
-# Restore from backup
-pg_restore -U tirreno -d tirreno tirreno_backup.dump
-
-# Or restore from SQL
-psql -U tirreno -d tirreno < tirreno_schema.sql
-psql -U tirreno -d tirreno < tirreno_data.sql
+# Restore from backup (--no-comments skips extension comments the tirreno user may not change)
+pg_restore --no-comments -h 127.0.0.1 -U tirreno -d tirreno tirreno_backup.dump
 ```
+
+Use the full backup to move tirreno. Loading `tirreno_data.sql` into a database that already has the schema fails for the `queue_new_events_cursor` row, because the table's trigger runs during the restore.
 
 **Verify migration:**
 
 ```bash
 # Check table counts
-psql -U tirreno -d tirreno -c "SELECT COUNT(*) FROM event_account;"
-psql -U tirreno -d tirreno -c "SELECT COUNT(*) FROM event;"
+psql -h 127.0.0.1 -U tirreno -d tirreno -c "SELECT COUNT(*) FROM event_account;"
+psql -h 127.0.0.1 -U tirreno -d tirreno -c "SELECT COUNT(*) FROM event;"
 ```
 
 ---
@@ -586,6 +591,8 @@ git fetch origin
 git pull origin master
 ```
 
+Run Git as the user that owns the files, for example `sudo -u www-data git pull origin master`. Run as root, Git stops with "detected dubious ownership".
+
 If you have local changes, stash them first:
 
 ```bash
@@ -599,6 +606,8 @@ git stash pop
 ```bash
 composer update tirreno/tirreno
 ```
+
+This updates tirreno when it was added to a project with `composer require`. In a `composer create-project` installation tirreno is the project itself, so Composer reports "Package tirreno/tirreno listed for update is not locked" and changes nothing; update such an installation with Git or a new `create-project`.
 
 ### Docker
 
@@ -655,12 +664,10 @@ php -v
 php -m | grep -E "pdo_pgsql|pgsql|curl|mbstring"
 ```
 
-If using multiple PHP versions, ensure Apache use the correct one:
+If using multiple PHP versions, ensure Apache uses the correct one:
 ```bash
 # Check PHP module loaded by Apache
 apachectl -M | grep php
-
-ls -la /run/php/
 ```
 
 ### Sending data issues
@@ -676,7 +683,7 @@ ls -la /run/php/
 | `url` | URL path (max 2047 chars) |
 | `eventTime` | UTC timestamp `Y-m-d H:i:s.v` (defaults to current UTC time if missing or invalid) |
 
-See the [API reference](https://github.com/tirrenotechnologies/DEVELOPMENT.md#api-reference) for optional parameters and event types.
+See the [Sensor API reference](https://github.com/tirrenotechnologies/DEVELOPMENT.md#sensor-api-reference) for optional parameters and event types.
 
 **Events not appearing in tirreno:**
 
