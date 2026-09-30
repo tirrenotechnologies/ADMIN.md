@@ -74,7 +74,7 @@ Hardware: 512 MB RAM for PostgreSQL (4 GB recommended), ~3 GB storage per 1M eve
 
 ### Download
 
-1. Download the latest version of tirreno: [tirreno-master.zip](https://www.tirreno.com/download.php)
+1. Download the latest version of tirreno: [tirreno-master.zip](https://www.tirreno.com/download/)
 2. Extract the ZIP file to the location where you want it installed on your web server
 3. Configure your web server to point to the tirreno directory
 4. Run the [web installer](#web-installer)
@@ -327,7 +327,7 @@ Each run executes the jobs whose schedule matches the current time. Jobs with `*
 | Job | Schedule (cron expression) | Description |
 |-----|----------------------------|-------------|
 | enrichmentQueueHandler | `* * * * *` | Process IP/email/phone enrichment |
-| riskScoreQueueHandler | `* * * * *` | Calculate user risk scores |
+| riskScoreQueueHandler | `* * * * *` | Calculate entity risk scores |
 | batchedNewEvents | `* * * * *` | Process new incoming events |
 | blacklistQueueHandler | `* * * * *` | Process blacklist updates |
 | deletionQueueHandler | `* * * * *` | Handle data deletion requests |
@@ -441,7 +441,7 @@ tirreno writes logs to the `assets/logs/` directory:
 | Log file | Description |
 |----------|-------------|
 | `error.log` | Application errors and exceptions |
-| `blacklist.log` | Blacklist events — records when users are automatically blacklisted by rules |
+| `blacklist.log` | Blacklist events — records when entities are automatically blacklisted by rules |
 | `sql.log` | SQL queries (disabled by default, enable with `PRINT_SQL_LOG_AFTER_EACH_SCRIPT_CALL = 1`) |
 
 For Docker/Heroku deployments, set `LOG_TO_STDOUT = true` to also send log messages to the container output.
@@ -674,26 +674,17 @@ apachectl -M | grep php
 
 **Note:** The API uses form-urlencoded format, not JSON.
 
-**Required parameters:**
-
-| Parameter | Description |
-|-----------|-------------|
-| `userName` | Unique user ID (max 100 chars) |
-| `ipAddress` | IPv4/IPv6 address (invalid IPs default to `0.0.0.0`) |
-| `url` | URL path (max 2047 chars) |
-| `eventTime` | UTC timestamp `Y-m-d H:i:s.v` (defaults to current UTC time if missing or invalid) |
-
-See the [Sensor API reference](https://github.com/tirrenotechnologies/DEVELOPMENT.md#sensor-api-reference) for optional parameters and event types.
+For required and optional parameters, event types and response codes, see the [Sensor API reference](https://github.com/tirrenotechnologies/DEVELOPMENT.md#sensor-api-reference).
 
 **Events not appearing in tirreno:**
 
-1. **Check API key:** Ensure your API key matches the one on the **API** page of tirreno, where it is shown as the **Tracking ID**
+1. **Check Tracking ID:** Ensure the value you send in the `Api-Key` header matches the **Tracking ID** on the **API** page of tirreno
 2. **Verify endpoint:** Confirm you're posting to `/sensor/` (with trailing slash)
-3. **Check Logbook:** Look for failed requests in the Logbook page. Requests with a missing or unknown API key do not appear in the Logbook; check the web server error log instead (see below)
+3. **Check Logbook:** Look for failed requests in the Logbook page. Requests with a missing or unknown Tracking ID do not appear in the Logbook; check the web server error log instead (see below)
 4. **Test with curl:**
 ```bash
 curl -v -X POST https://your-tirreno.com/sensor/ \
-  -H "Api-Key: your-api-key" \
+  -H "Api-Key: your-tracking-id" \
   -d "userName=test" \
   -d "ipAddress=1.2.3.4" \
   -d "url=/test" \
@@ -706,20 +697,12 @@ curl -v -X POST https://your-tirreno.com/sensor/ \
 **Test from the server command line** (bypasses the web server, useful to rule out Apache or network issues):
 
 ```bash
-php sensor/index.php --apiKey=your-api-key --userName=test --ipAddress=1.2.3.4 \
+php sensor/index.php --apiKey=your-tracking-id --userName=test --ipAddress=1.2.3.4 \
     --url=/test --eventTime="2024-12-08 01:01:00.000" --eventType=page_view
 ```
 No output means success, errors are printed to stderr (exit code is always 0).
 
-**Check response codes:**
-
-| Response | Meaning |
-|----------|---------|
-| 204, no body | Event accepted |
-| 200, empty body | Request rejected: missing or unknown API key, or a required field is missing. See the web server error log for the reason |
-| 429 | Rate limited (`LEAKY_BUCKET_RPS` & `LEAKY_BUCKET_WINDOW`, see [Environment variables](#environment-variables)) |
-| 500 | Server error |
-| 403 | Wrong endpoint, e.g., `/sensor` without the trailing slash |
+**Check response codes:** see [Response codes](https://github.com/tirrenotechnologies/DEVELOPMENT.md#response-codes). A `200` with an empty body means the request was rejected; the reason is in the web server error log.
 
 **Rejection reasons** are written to the web server error log (e.g., `/var/log/apache2/error.log`):
 ```
@@ -728,43 +711,19 @@ Error 401: API key from the "Api-Key" header is not found
 Error 400: Validation error: "Required field is missing or empty" for key "ipAddress"
 ```
 
-Fields with invalid values are corrected instead of rejected and logged as **Validation warning**: a missing or invalid `eventTime` is replaced with the current UTC time, and an empty or invalid `ipAddress` with `0.0.0.0`.
+Fields with invalid values are corrected instead of rejected and logged as **Success with warnings** (see [Required parameters](https://github.com/tirrenotechnologies/DEVELOPMENT.md#required-parameters)).
 
-**Rate limit exceeded (429):**
-
-tirreno has a leaky bucket rate limiter, applied per API key and configured with `LEAKY_BUCKET_RPS` (default `10`) and `LEAKY_BUCKET_WINDOW` (default `20` seconds): at most `LEAKY_BUCKET_RPS × LEAKY_BUCKET_WINDOW` requests are accepted within the window. Set either value in `config/local/config.local.ini` or as an environment variable; `0` disables the limit. This allows you to set an RPS cap to prevent tirreno from failing under an excessive volume of events.
-
-**Note:** Successful requests (2xx) return no response body.
+**Rate limit exceeded (429):** raise `LEAKY_BUCKET_RPS` / `LEAKY_BUCKET_WINDOW` (see [Environment variables](#environment-variables)) or reduce traffic. How the limiter works is described in [Rate limiting](https://github.com/tirrenotechnologies/DEVELOPMENT.md#rate-limiting).
 
 ### Logbook review
 
-The Logbook shows all incoming API requests:
-
-1. **Access:** Navigate to Logbook in the left menu
-2. **Columns:**
-   - Source IP: Where the request came from
-   - Local timestamp: When the request was received (in your time zone)
-   - Endpoint: Which API endpoint was called
-   - Status: Status type (see below)
-   - Raw POST data: The fields that were sent
-3. **Filtering:** Use the search box to filter by any column
-4. **Chart:** Shows request volume over time
-
-**Logbook status types:**
-
-| Status | Description |
-|--------|-------------|
-| Success | Event recorded successfully |
-| Validation warning | Event recorded with field corrections (e.g., truncated values) |
-| Critical validation error | Event rejected due to missing required fields |
-| Critical error | Server error, event not recorded |
-| Rate limit exceeded | Request rejected due to rate limiting (`LEAKY_BUCKET_RPS` & `LEAKY_BUCKET_WINDOW`) |
+The Logbook columns and status types are described in [Logbook](https://github.com/tirrenotechnologies/USER.md#logbook) in the user guide.
 
 **What to look for:**
-- Critical validation errors: missing required parameters
-- Validation warnings: invalid values that were corrected (e.g., missing `eventTime`)
+- Request failed: missing required parameters, or a server error
+- Success with warnings: invalid values that were corrected (e.g., invalid `eventTime`)
 - Rate limit exceeded: raise `LEAKY_BUCKET_RPS` / `LEAKY_BUCKET_WINDOW` or reduce traffic
-- No entries at all: API key issues (these requests are not logged in the Logbook; check the web server error log)
+- No entries at all: Tracking ID issues (these requests are not logged in the Logbook; check the web server error log)
 - Gaps in traffic: Network or integration issues
 - Unexpected IPs: Verify your application servers
 
@@ -793,6 +752,7 @@ The Logbook shows all incoming API requests:
 | Documentation | [docs.tirreno.com](https://docs.tirreno.com) |
 | Resource center | [tirreno.com/bat](https://www.tirreno.com/bat/) |
 | Developers Guide | [github.com/tirrenotechnologies/DEVELOPMENT.md](https://github.com/tirrenotechnologies/DEVELOPMENT.md) |
+| User guide | [github.com/tirrenotechnologies/USER.md](https://github.com/tirrenotechnologies/USER.md) |
 | API reference | [github.com/tirrenotechnologies/API.md](https://github.com/tirrenotechnologies/API.md) |
 | GitHub | [github.com/tirrenotechnologies/tirreno](https://github.com/tirrenotechnologies/tirreno) |
 | GitLab Mirror | [gitlab.com/tirreno/tirreno](https://gitlab.com/tirreno/tirreno) |
@@ -802,6 +762,7 @@ The Logbook shows all incoming API requests:
 | PHP Tracker | [github.com/tirrenotechnologies/tirreno-php-tracker](https://github.com/tirrenotechnologies/tirreno-php-tracker) |
 | Python Tracker | [github.com/tirrenotechnologies/tirreno-python-tracker](https://github.com/tirrenotechnologies/tirreno-python-tracker) |
 | Node.js Tracker | [github.com/tirrenotechnologies/tirreno-nodejs-tracker](https://github.com/tirrenotechnologies/tirreno-nodejs-tracker) |
+| WordPress Tracker | [github.com/tirrenotechnologies/tirreno-wordpress-tracker](https://github.com/tirrenotechnologies/tirreno-wordpress-tracker) |
 | Community Chat | [chat.tirreno.com](https://chat.tirreno.com) |
 | Support Email | ping@tirreno.com |
 | Security Email | security@tirreno.com |
